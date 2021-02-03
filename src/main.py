@@ -12,9 +12,10 @@ import NNmodels as nm
 import client as clt
 import dataLoader as dl
 import test as test
+import communication_assistant as ca
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--n_clients', type=int, default=5, help='')
+parser.add_argument('--n_clients', type=int, default=4, help='')
 parser.add_argument('--n_chunks', type=int, default=10, help='')
 parser.add_argument('--p_level', type=int, default=10, help='')
 parser.add_argument('--batch_size', type=int, default=1, help='')
@@ -38,29 +39,6 @@ else:
     print('학습을 진행하는 기기: CPU')
     '''
 
-def main_worker(n_clients, inQ, outQs):
-  n_processes_done = 0
-  memory = {}
-  while n_processes_done != n_clients:
-    if not inQ.empty():
-      msg = inQ.get()
-      if msg['type'] == 'write':
-        memory[msg['from']] = msg['data']
-        outQs[msg['from']].put({'status': 'success'})
-
-      elif msg['type'] == 'read':
-        if msg['to'] in memory.keys():
-          outQs[msg['from']].put({'status': 'success', 'data': memory[msg['to']]})
-        
-        else:
-          outQs[msg['from']].put({'status': 'fail'})
-
-
-      elif msg['type'] == 'done':
-        n_processes_done += 1
-
-    
-      
       
 if __name__ == '__main__':
   opt = parser.parse_args()
@@ -73,20 +51,19 @@ if __name__ == '__main__':
 
   test_acc_log = [0 for _ in range(opt.n_rounds)]
 
-  inQ = mp.Queue()
-  outQs = {i: mp.Queue() for i in range(opt.n_clients)}
+  clientQs = {i: mp.Queue() for i in range(opt.n_clients)}
+  assistantQs = {i: mp.Queue() for i in range(opt.n_clients)}
 
   # main worker process
   processes = []
-  p = mp.Process(target=main_worker, args=(opt.n_clients, inQ, outQs))
-  p.start()
-  processes.append(p)
-
   # distillates knowledge from teacher models
   for i in range(opt.n_clients):
-    p = mp.Process(target=clt.make_client, args=(i, train_loader[i], opt.model_type, opt.batch_size, opt.n_clients, outQs[i], inQ))
-    p.start()
-    processes.append(p)
+    p1 = mp.Process(target=ca.communication_assistant, args=(clientQs[i], assistantQs, i, opt.n_clients))
+    p2 = mp.Process(target=clt.make_client, args=(i, train_loader[i], opt.model_type, opt.batch_size, opt.n_clients, clientQs[i], assistantQs[i]))
+    p1.start()
+    p2.start()
+    processes.append(p1)
+    processes.append(p2)
   
   for p in processes: p.join()
     

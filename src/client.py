@@ -6,11 +6,11 @@ import time
 
 import test as test
         
-def make_client(clientID, trainloader, model_type, batch_size, n_clients, inQ, outQ):
+def make_client(clientID, trainloader, model_type, batch_size, n_clients, myQ, assistantQ):
 
   client = Client(clientID, trainloader, model_type, batch_size)
   
-  client.local_train(inQ, outQ)
+  client.local_train(myQ, assistantQ)
 
   for i in range(3):
     # select teachers
@@ -20,10 +20,10 @@ def make_client(clientID, trainloader, model_type, batch_size, n_clients, inQ, o
 
     client.teachers = idx_teachers
 
-    client.get_teacher_models(inQ, outQ)
+    client.get_teacher_models(myQ, assistantQ)
   
     # KD train
-    client.KD_trainNtest(inQ, outQ)
+    client.KD_trainNtest(myQ, assistantQ)
     client.model.share_memory()
 
       
@@ -54,16 +54,16 @@ class Client:
     self.batch_size = batch_size
 
 
-  def get_teacher_models(self, inQ, outQ):
+  def get_teacher_models(self, myQ, assistantQ):
     for teacher in self.teachers:
       # TM = teacher.model_type()
 
       while True:
-        outQ.put({'type': 'read', 'from': self.clientID, 'to': teacher})
+        assistantQ.put({'type': 'read', 'from': self.clientID, 'to': teacher})
         while True:
-          if not inQ.empty():
+          if not myQ.empty():
             break
-        msg = inQ.get()
+        msg = myQ.get()
         if msg['status'] == 'success':
           break
 
@@ -72,7 +72,7 @@ class Client:
       self.teacher_models.append(TM)
 
 
-  def local_train(self, inQ, outQ, n_epochs=3):
+  def local_train(self, myQ, assistantQ, n_epochs=1):
     print(str(self.clientID) + " training with " + str(len(self.dataloader)) + " data")
     
     self.model.train()
@@ -108,15 +108,16 @@ class Client:
       print("Step: {}/{} | Acc:{:.3f}%".format(batch_idx + 1, len(self.dataloader),
                                                                                   100. * correct / total))
 
-    outQ.put({'type': 'write', 'from': self.clientID, 'data':{'model_type': self.model_type, 'params': self.model.state_dict()}})
+    assistantQ.put({'type': 'write', 'from': self.clientID, 'data':{'model_type': self.model_type, 'params': self.model.state_dict()}})
     while True:
-      if not inQ.empty():
-        break
-    msg = inQ.get()
+      if not myQ.empty():
+        msg = myQ.get()
+        if msg['status'] == 'success':
+          break
 
 
   
-  def KD_trainNtest(self, inQ, outQ, n_epochs=3):
+  def KD_trainNtest(self, myQ, assistantQ, n_epochs=3):
     student = self.model
     student.train()  # tells student to do training
 
@@ -152,11 +153,12 @@ class Client:
           # print('Train Epoch: {:.2f} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tError: {:.6f}'.format(
           #     partialEpoch, nProcessed, nTrain, 100. * batch_idx / len(self.dataloader), loss.item(), err
           # ))
-    outQ.put({'type': 'write', 'from': self.clientID, 'data':{'model_type': self.model_type, 'params': self.model.state_dict()}})
+    assistantQ.put({'type': 'write', 'from': self.clientID, 'data':{'model_type': self.model_type, 'params': self.model.state_dict()}})
     while True:
-      if not inQ.empty():
-        break
-    msg = inQ.get()
+      if not myQ.empty():
+        msg = myQ.get()
+        if msg['status'] == 'success':
+          break
 
     test.test(self)
     
